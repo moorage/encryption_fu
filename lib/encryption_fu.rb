@@ -24,17 +24,17 @@ module EncryptionFu
     private
       def add_attr_accessors(fields)
         fields.each do |field_name|
-          # Reader
+          # Reader - passes value through decryption if not already set.
           self.send :define_method, field_name do
             if @encryption_fu_attrs[field_name].nil?
               @encryption_fu_attrs[field_name] = self.decrypt(self.send("#{field_name}_#{option[:encrypted_field_append]}".to_sym))
             end
             @encryption_fu_attrs[field_name]
           end
-          # Writer
+          # Writer - passes value through encryption, and sets unencrypted value in instance variable
           self.send :define_method, "#{field_name}=".to_sym, arg do
-            @encryption_fu_attrs[field_name] = arg
             self.send("#{field_name}_#{option[:encrypted_field_append]}=".to_sym, self.encrypt(arg))
+            @encryption_fu_attrs[field_name] = arg
           end
         end
       end
