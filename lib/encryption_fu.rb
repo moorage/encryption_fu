@@ -5,8 +5,8 @@ module EncryptionFu
       
       options[:fields]                  ||= []          # Fields that are to be encrypted (withouth appended string)
       options[:salt_generator]          ||= nil         # Custom method to call (symbol) to generate salt
-      option[:salt_field]               ||= :salt       # ActiveRecord field for accessing/saving salt
-      option[:encrypted_field_append]   ||= :encrypted  # Appended string to fields for actual storage 
+      options[:salt_field]               ||= :salt       # ActiveRecord field for accessing/saving salt
+      options[:encrypted_field_append]   ||= :encrypted  # Appended string to fields for actual storage 
       
       # doing these shenanigans so that the option hash passed in is available to the outside world
       class_inheritable_accessor :encryption_fu_options
@@ -14,10 +14,9 @@ module EncryptionFu
       
       # only need to define these once on a class
       unless included_modules.include?(InstanceMethods)
-        # has_many :price_options, :class_name => 'Biz::PriceOption', :as => :price_optionable, :order => :position
         before_validation :generate_and_set_salt
-        add_attr_accessors options[:fields]
         include InstanceMethods
+        add_attr_accessors options[:fields]
       end
     end
     
@@ -26,14 +25,17 @@ module EncryptionFu
         fields.each do |field_name|
           # Reader - passes value through decryption if not already set.
           self.send :define_method, field_name do
+            @encryption_fu_attrs ||= Hash.new
             if @encryption_fu_attrs[field_name].nil?
-              @encryption_fu_attrs[field_name] = self.decrypt(self.send("#{field_name}_#{option[:encrypted_field_append]}".to_sym))
+              @encryption_fu_attrs[field_name] = 
+                self.decrypt(self.send("#{field_name}_#{self.encryption_fu_options[:encrypted_field_append]}".to_sym))
             end
             @encryption_fu_attrs[field_name]
           end
           # Writer - passes value through encryption, and sets unencrypted value in instance variable
-          self.send :define_method, "#{field_name}=".to_sym, arg do
-            self.send("#{field_name}_#{option[:encrypted_field_append]}=".to_sym, self.encrypt(arg))
+          self.send :define_method, "#{field_name}=".to_sym do |arg|
+            @encryption_fu_attrs ||= Hash.new
+            self.send("#{field_name}_#{self.encryption_fu_options[:encrypted_field_append]}=".to_sym, self.encrypt(arg))
             @encryption_fu_attrs[field_name] = arg
           end
         end
@@ -44,6 +46,7 @@ module EncryptionFu
     
     protected 
       def crypt(method_sym, cipher_key, plain_text)
+        return nil if plain_text.nil?
         cipher = OpenSSL::Cipher::Cipher.new('aes-256-cbc')
         encryptor = case method_sym
         when :encrypt
