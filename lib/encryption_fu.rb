@@ -19,7 +19,6 @@ module EncryptionFu
         add_attr_accessors options[:fields]
       end
     end
-    
     private
       def add_attr_accessors(fields)
         fields.each do |field_name|
@@ -46,7 +45,7 @@ module EncryptionFu
     
     protected 
       def crypt(method_sym, cipher_key, plain_text)
-        return nil if plain_text.nil?
+        return nil if plain_text.blank?
         cipher = OpenSSL::Cipher::Cipher.new('aes-256-cbc')
         encryptor = case method_sym
         when :encrypt
@@ -60,10 +59,12 @@ module EncryptionFu
       end
 
       def encrypt(text)
-        crypt(:encrypt, self.generate_and_set_salt, text)
+        result = crypt(:encrypt, self.generate_and_set_salt, text)
+        return result.nil? ? result : URI.escape(result) # TODO Un-solvable bug workaround - CipherError
       end
 
       def decrypt(text)
+        text = text.nil? ? text : URI.unescape(text) # TODO Un-solvable bug workaround - CipherError
         crypt(:decrypt, self.generate_and_set_salt, text)
       end
 
@@ -74,7 +75,7 @@ module EncryptionFu
           if self.encryption_fu_options[:salt_generator]
             salt_val = self.send(encryption_fu_options[:salt_generator])
           else
-            salt_val = Digest::SHA1.hexdigest("--#{Time.now.to_s}--#{self.id}--")
+            salt_val = Digest::SHA256.hexdigest("--#{Time.now.to_s}--#{self.id}--")
           end
           self.send "#{self.encryption_fu_options[:salt_field]}=".to_sym, salt_val
         end
