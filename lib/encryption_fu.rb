@@ -1,12 +1,13 @@
+# Expects you to define private_encryption_key method
+# Call encrypt_fields any time to read the values from the virtual attributes and encrypt them into their corresponding _encrypted fields.
 module EncryptionFu
   
   module ActMethods
     def has_encrypted_fields(options = {})
       
-      options[:fields]                  ||= []          # Fields that are to be encrypted (withouth appended string)
-      options[:salt_generator]          ||= nil         # Custom method to call (symbol) to generate salt
-      options[:salt_field]               ||= :salt       # ActiveRecord field for accessing/saving salt
-      options[:encrypted_field_append]   ||= :encrypted  # Appended string to fields for actual storage 
+      options[:fields]                  ||= []                      # Fields that are to be encrypted (withouth appended string)
+      options[:public_key_field]        ||= :public_encryption_key  # ActiveRecord field for saving public_encryption_key (aka salt)
+      options[:encrypted_field_append]  ||= :encrypted              # Appended string to fields for actual storage 
       
       # doing these shenanigans so that the option hash passed in is available to the outside world
       class_inheritable_accessor :encryption_fu_options
@@ -14,7 +15,7 @@ module EncryptionFu
       
       # only need to define these once on a class
       unless included_modules.include?(InstanceMethods)
-        before_validation :generate_and_set_salt
+        before_validation :encrypt_fields  # Actually encrypts all fields - will make a call to generate_public_encryption_key
         include InstanceMethods
         add_attr_accessors options[:fields]
       end
@@ -31,10 +32,9 @@ module EncryptionFu
             end
             @encryption_fu_attrs[field_name]
           end
-          # Writer - passes value through encryption, and sets unencrypted value in instance variable
+          # Writer - leaves unencrypted until encrypt_fields is called.
           self.send :define_method, "#{field_name}=".to_sym do |arg|
             @encryption_fu_attrs ||= Hash.new
-            self.send("#{field_name}_#{self.encryption_fu_options[:encrypted_field_append]}=".to_sym, self.encrypt(arg))
             @encryption_fu_attrs[field_name] = arg
           end
         end
@@ -44,8 +44,8 @@ module EncryptionFu
   module InstanceMethods
     
     protected 
-      def crypt(method_sym, cipher_key, plain_text)
-        return nil if plain_text.blank?
+      def crypt(method_sym, input_text)
+        return nil if input_text.blank?
         cipher = OpenSSL::Cipher::Cipher.new('aes-256-cbc')
         encryptor = case method_sym
         when :encrypt
@@ -53,33 +53,50 @@ module EncryptionFu
         when :decrypt
           cipher.decrypt
         end
-        # encryptor = cipher.send(method_sym)
-        encryptor.key = cipher_key
-        encryptor.update(plain_text) << encryptor.final      
+        encryptor.key = self.encryption_key
+        encryptor.update(input_text) << encryptor.final      
       end
 
       def encrypt(text)
-        result = crypt(:encrypt, self.generate_and_set_salt, text)
+        result = crypt(:encrypt, text)
         return result.nil? ? result : URI.escape(result) # TODO Un-solvable bug workaround - CipherError
       end
 
       def decrypt(text)
         text = text.nil? ? text : URI.unescape(text) # TODO Un-solvable bug workaround - CipherError
-        crypt(:decrypt, self.generate_and_set_salt, text)
+        crypt(:decrypt, text)
       end
 
-      # Sets the salt for this (if needed)
-      def generate_and_set_salt
-        salt_val = self.send self.encryption_fu_options[:salt_field]
-        if salt_val.blank?
-          if self.encryption_fu_options[:salt_generator]
-            salt_val = self.send(encryption_fu_options[:salt_generator])
-          else
-            salt_val = Digest::SHA256.hexdigest("--#{Time.now.to_s}--#{self.id}--")
-          end
-          self.send "#{self.encryption_fu_options[:salt_field]}=".to_sym, salt_val
-        end
-        salt_val
+      def generate_public_encryption_key
+        Digest::SHA256.hexdigest("-#{Time.now.to_s}-")
       end
+      
+      # Encrypts a single field, with the current value in its corresponding attr - sets the value into _encrypted.
+      def encrypt_field(field_name)
+        encrypted_val = self.encrypt(self.send(field_name))
+        self.send("#{field_name}_#{self.encryption_fu_options[:encrypted_field_append]}=".to_sym, encrypted_val)
+      end
+      
+      # Encrypts all fields, with the current values set in their corresponding virtual attribute. 
+      def encrypt_fields
+        self.encryption_fu_options[:fields].each do |field_name|
+          self.encrypt_field field_name
+        end
+      end
+      
+      # Returns the complete encryption key (sets up a new one if necessary)
+      def encryption_key
+        return @encryption_fu_attrs['-encryption-key-'] if @encryption_fu_attrs['-encryption-key-']
+        
+        public_key = self.send self.encryption_fu_options[:public_key_field]
+        if public_key.blank?
+          public_key = self.generate_public_encryption_key
+          self.send "#{self.encryption_fu_options[:public_key_field]}=".to_sym, public_key
+        end
+        private_key = self.private_encryption_key
+        
+        @encryption_fu_attrs['-encryption-key-'] = Digest::SHA256.hexdigest("-#{private_key}-#{public_key}-")
+      end
+
   end
 end
